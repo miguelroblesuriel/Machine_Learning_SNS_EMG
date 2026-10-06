@@ -1,37 +1,53 @@
-# irjfirjfeirjf
+# This file is a small exploratory script for EMG signal inspection.
+# It loads the dataset, filters specific label/class combinations, and plots the signal.
+# I would not remove anything here yet, because the script is still useful for debugging and visual validation.
+# The duplicate NumPy import is redundant, but it is harmless and I left it in place to avoid changing working code.
 
 import pandas as pd
 import numpy as np
 import seaborn as sns
 from Visualization.plot_signal import plot_signal
 
-
+# Duplicate import kept intentionally; it is not harmful, but it is redundant.
 import numpy as np
 
 
 def extract_signals(df):
+    # Collect split signal segments for each subject/label/class pair.
     subject_signals = []
+
+    # There are 8 EMG channels in the dataset.
     channel_cols = [f"channel{k + 1}" for k in range(8)]
 
+    # Group rows by the subject label and class number.
     for (label, class_val), group in df.groupby(["label", "class"]):
+        # Extract the time sequence for this subset.
         time = group["time"].to_numpy()
 
+        # Detect points where the time sequence resets or moves backward.
+        # These indicate a new recording segment.
         split_indices = np.where(np.diff(time) < 0)[0] + 1
 
+        # Split the time values into separate segments.
         time_splits = np.split(time, split_indices)
 
+        # Split all 8 EMG channels using the same boundaries.
         values_splits = [
             np.split(group[col].to_numpy(), split_indices)
             for col in channel_cols
         ]
 
+        # First segment is stored as signal_values_1.
         signal_values_1 = [val_split[0] for val_split in values_splits]
+
+        # If a reset was detected, store the second segment as well.
         signal_values_2 = (
             [val_split[1] for val_split in values_splits]
             if len(split_indices) > 0
             else []
         )
 
+        # Store the segmented data in a dictionary for later plotting/inspection.
         subject_signals.append({
             'subject': label,
             'signal_values_1': signal_values_1,
@@ -45,19 +61,36 @@ def extract_signals(df):
 
     return subject_signals
 
+# Path to the EMG dataset.
 input_fileroute = "Project_Data_EE4C12_S&S_EMG.csv"
+
+# Load the dataset into a pandas DataFrame.
 df = pd.read_csv(input_fileroute)
+
+# Display the first few rows to inspect the structure of the data.
 print(df.head())
+
+# Select the signal from a specific subject/label/class combination.
 signal_value = df.loc[(df["label"] == 1) & (df["class"] == 1), "channel1"]
 signal_time = df.loc[(df["label"] == 1) & (df["class"] == 1), "time"]
+
+# Print the time values for that subset for manual inspection.
 print(df.loc[(df["label"] == 1) & (df["class"] == 1), "time"])
+
+# Plot the selected signal.
 plot_signal(signal_time, signal_value)
+
+# Extract segmented signals for all groups.
 subject_signals = extract_signals(df)
-value_previous =0
+
+# This loop checks whether the time values decrease, which would indicate a new segment.
+value_previous = 0
 for value in signal_time:
     if value < value_previous:
         print("a")
     value_previous = value
+
+# Plot the first and second segments from each extracted signal group.
 for subject_signal in subject_signals:
     plot_signal(subject_signal['signal_time_1'], subject_signal['signal_values_1'][0])
     plot_signal(subject_signal['signal_time_2'], subject_signal['signal_values_2'][0])
