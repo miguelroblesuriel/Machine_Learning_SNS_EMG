@@ -58,6 +58,20 @@ def extract_signals(df):
 
     return subject_signals
 
+def extract_windows(signal_data, window_size=200, step_size=50):
+    """
+    Slices a 2D array of shape (samples, n_channels) into 3D windows:
+    (n_windows, window_size, n_channels).
+    """
+    n_samples, n_channels = signal_data.shape
+    windows = []
+    
+    for start in range(0, n_samples - window_size + 1, step_size):
+        end = start + window_size
+        windows.append(signal_data[start:end, :])
+        
+    return np.array(windows)
+
 
 input_fileroute = "Project_Data_EE4C12_S&S_EMG.csv"
 
