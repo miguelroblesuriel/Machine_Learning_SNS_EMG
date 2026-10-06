@@ -24,11 +24,8 @@ def extract_signals(df):
         # Extract the time sequence for this subset.
         time = group["time"].to_numpy()
 
-        # Detect points where the time sequence resets or moves backward.
-        # These indicate a new recording segment.
+        # Detect and split new recording segments.
         split_indices = np.where(np.diff(time) < 0)[0] + 1
-
-        # Split the time values into separate segments.
         time_splits = np.split(time, split_indices)
 
         # Split all 8 EMG channels using the same boundaries.
@@ -37,17 +34,17 @@ def extract_signals(df):
             for col in channel_cols
         ]
 
-        # First segment is stored as signal_values_1.
+        # Store first series
         signal_values_1 = [val_split[0] for val_split in values_splits]
 
-        # If a reset was detected, store the second segment as well.
+        # If reset, store second series
         signal_values_2 = (
             [val_split[1] for val_split in values_splits]
             if len(split_indices) > 0
             else []
         )
 
-        # Store the segmented data in a dictionary for later plotting/inspection.
+        # Store in dictionary
         subject_signals.append({
             'subject': label,
             'signal_values_1': signal_values_1,
@@ -61,23 +58,18 @@ def extract_signals(df):
 
     return subject_signals
 
-# Path to the EMG dataset.
+
 input_fileroute = "Project_Data_EE4C12_S&S_EMG.csv"
 
-# Load the dataset into a pandas DataFrame.
 df = pd.read_csv(input_fileroute)
 
-# Display the first few rows to inspect the structure of the data.
 print(df.head())
 
-# Select the signal from a specific subject/label/class combination.
 signal_value = df.loc[(df["label"] == 1) & (df["class"] == 1), "channel1"]
 signal_time = df.loc[(df["label"] == 1) & (df["class"] == 1), "time"]
 
-# Print the time values for that subset for manual inspection.
 print(df.loc[(df["label"] == 1) & (df["class"] == 1), "time"])
 
-# Plot the selected signal.
 plot_signal(signal_time, signal_value)
 
 # Extract segmented signals for all groups.
