@@ -151,6 +151,62 @@ def split_by_subjects(subject_signals, training_ratio, validation_ratio):
         np.array(validation_classes)
     )
 
+def extract_from_df(df, signals_list, classes_list):
+    # Ajusta esto según cómo guardes las señales y clases en tus columnas
+    for _, row in df.iterrows():
+        signals_list.append(row['signal'])  # Cambia 'signal' por el nombre de tu columna
+        classes_list.append(row['class'])
+    return signals_list,classes_list
+
+def split_total_samples(subject_signals, training_ratio, validation_ratio):
+    training_signals = []
+    testing_signals = []
+    validation_signals = []
+    training_classes = []
+    testing_classes = []
+    validation_classes = []
+
+    subject_signals = pd.DataFrame(subject_signals)
+
+    shuffled_data = subject_signals.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    total_samples = len(shuffled_data)
+    train_end = int(total_samples * training_ratio)
+    val_end = train_end + int(total_samples * validation_ratio)
+
+    train_df = shuffled_data.iloc[:train_end]
+    val_df = shuffled_data.iloc[train_end:val_end]
+    test_df = shuffled_data.iloc[val_end:]
+
+    training_signals, training_classes = extract_from_df(train_df, training_signals, training_classes)
+    validation_signals, validation_classes = extract_from_df(val_df, validation_signals, validation_classes)
+    testing_signals, testing_classes = extract_from_df(test_df, testing_signals, testing_classes)
+
+    all_train_data = np.hstack([np.array(sample) for sample in training_signals])
+    print(all_train_data[0])
+
+    global_mean = np.mean(all_train_data, axis=1)
+    print(global_mean)
+    global_std = np.std(all_train_data, axis=1)
+    global_std[global_std == 0] = 1.0
+
+    all_signals = training_signals + testing_signals + validation_signals
+    max_len = max(np.array(sample).shape[1] for sample in all_signals)
+
+    training_signals = normalize_and_pad(training_signals, global_mean, global_std, max_len)
+    testing_signals = normalize_and_pad(testing_signals, global_mean, global_std, max_len)
+    validation_signals = normalize_and_pad(validation_signals, global_mean, global_std, max_len)
+
+    return (
+        training_signals,
+        testing_signals,
+        validation_signals,
+        np.array(training_classes),
+        np.array(testing_classes),
+        np.array(validation_classes)
+    )
+
+
 input_fileroute = "Project_Data_EE4C12_S&S_EMG.csv"
 
 df = pd.read_csv(input_fileroute)
@@ -178,9 +234,13 @@ for value in signal_time:
 for subject_signal in subject_signals:
     if subject_signal["class"] == 1:
         if subject_signal["subject"] == 1:
-            plot_signal(subject_signal['signal_time_1'], subject_signal['signal_values_1'][0])
-            plot_signal(subject_signal['signal_time_2'], subject_signal['signal_values_2'][0])
+            plot_signal(subject_signal['signal_time_1'], subject_signal['signal_values_1'][6])
+            plot_signal(subject_signal['signal_time_2'], subject_signal['signal_values_2'][6])
 
-training_x, testing_x, validation_x,training_y, testing_y, validation_y = split_by_subjects(subject_signals,0.6,0.2)
-print(training_x[0])
-print(training_y[0])
+training_x, testing_x, validation_x, training_y, testing_y, validation_y = split_by_subjects(subject_signals,0.6,0.2)
+print(len(training_x))
+print(len(training_y))
+
+training_x2, testing_x2, validation_x2, training_y2, testing_y2, validation_y2 = split_by_subjects(subject_signals,0.6,0.2)
+print(len(training_x2))
+print(len(training_y2))
