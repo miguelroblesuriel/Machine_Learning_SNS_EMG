@@ -6,10 +6,9 @@
 import pandas as pd
 import numpy as np
 import seaborn as sns
+import matplotlib.pyplot as plt
 from Visualization.plot_signal import plot_signal
 
-# Duplicate import kept intentionally; it is not harmful, but it is redundant.
-import numpy as np
 
 
 def extract_signals(df):
@@ -58,7 +57,7 @@ def extract_signals(df):
 
     return subject_signals
 
-def extract_windows(signal_data, window_size=200, step_size=50):
+def extract_windows(signal_data, window_size=200, step_size=100):
     """
     Slices a 2D array of shape (samples, n_channels) into 3D windows:
     (n_windows, window_size, n_channels).
@@ -72,31 +71,134 @@ def extract_windows(signal_data, window_size=200, step_size=50):
         
     return np.array(windows)
 
+def plot_8_channels(time, channel, title="8 Independent EMG Channels"):
+    """
+    Plots 8 channels on separate, vertically stacked axes sharing the same X-axis.
+    channel_df should be a pandas DataFrame containing the 8 channel columns.
+    """
+    # Create a figure with 8 vertically stacked subplots sharing the X-axis
+    fig, axs = plt.subplots(8, 1, sharex='all', figsize=(12, 14))
+    fig.suptitle(title, fontsize=16)
+
+    # Extract column names dynamically so it works with any filtered data
+    cols = channel.columns
+
+    # Loop through and plot each channel on its own axis
+    for i in range(8):
+        axs[i].plot(time, channel[cols[i]], color=f"C{i}")
+        axs[i].set_ylabel(f"Ch {i+1}")
+        axs[i].grid(True)
+
+    plt.xlabel("Time (ms)")
+    plt.tight_layout()
+    plt.show()
+
+def compute_window_features(window):
+    """
+    Extracts MAV, AR(4), and MNF features from a single window.
+    Input shape:  (200, 8) -> 200 samples across 8 EMG channels
+    Output shape: (48,)    -> 6 features per channel * 8 channels
+    """
+    window_features = []
+
+    # Loop over each of the 8 EMG channels
+    for ch in range(8):
+        # Extract the 200 samples for the current channel
+        sig = window[:, ch]
+
+        # Mean Absolute Value (MAV)
+        # Calculate the mean of the absolute values of sig
+        mav = np.mean(np.abs(sig))
+        window_features.append(mav)
+        
+        # Autoregressive model (AR)
+        
+        # Minimum Noise Fraction (MNF)
+        
+
+    return np.array(window_features)
+
+## ===================================================================
+
 
 input_fileroute = "Project_Data_EE4C12_S&S_EMG.csv"
-
 df = pd.read_csv(input_fileroute)
 
-print(df.head())
+channel_cols_all = [f"channel{i}" for i in range(1, 9)]
+# plot_8_channels(time=df["time"], channel=channel_cols_all, title="Raw 8-channel Data")
 
-signal_value = df.loc[(df["label"] == 1) & (df["class"] == 1), "channel1"]
-signal_time = df.loc[(df["label"] == 1) & (df["class"] == 1), "time"]
+# Filtering out Class 0 (noise) and Class 7 (not perfrmed by everyone):
+df = df[df["class"] != 0].copy()
+df = df[df["class"] != 7].copy()
+print(df["class"].unique())
 
-print(df.loc[(df["label"] == 1) & (df["class"] == 1), "time"])
-
-plot_signal(signal_time, signal_value)
-
-# Extract segmented signals for all groups.
 subject_signals = extract_signals(df)
 
-# This loop checks whether the time values decrease, which would indicate a new segment.
-value_previous = 0
-for value in signal_time:
-    if value < value_previous:
-        print("a")
-    value_previous = value
+all_windows = []
+y_labels = []
+subject_ids = []
 
-# Plot the first and second segments from each extracted signal group.
-for subject_signal in subject_signals:
-    plot_signal(subject_signal['signal_time_1'], subject_signal['signal_values_1'][0])
-    plot_signal(subject_signal['signal_time_2'], subject_signal['signal_values_2'][0])
+for item in subject_signals:
+    # --- Series 1 ---
+    trial_1 = np.column_stack(item['signal_values_1'])
+    if len(trial_1) >= 200:
+        w_1 = extract_windows(trial_1, window_size=200, step_size=50)
+        all_windows.append(w_1)
+        y_labels.extend([item['class']] * len(w_1))
+        subject_ids.extend([item['subject']] * len(w_1))
+
+    # --- Series 2 (if present) ---
+    if len(item['signal_values_2']) > 0:
+        trial_2 = np.column_stack(item['signal_values_2'])
+        if len(trial_2) >= 200:
+            w_2 = extract_windows(trial_2, window_size=200, step_size=50)
+            all_windows.append(w_2)
+            y_labels.extend([item['class']] * len(w_2))
+            subject_ids.extend([item['subject']] * len(w_2))
+
+# Combine all extracted trial blocks into unified arrays
+X_raw_windows = np.vstack(all_windows)
+y_labels = np.array(y_labels)
+subject_ids = np.array(subject_ids)
+
+print(f"Raw windows shape:  {X_raw_windows.shape}")  # Expected: (N, 200, 8)
+print(f"Labels shape:       {y_labels.shape}")       # Expected: (N,)
+print(f"Subject IDs shape:  {subject_ids.shape}")   # Expected: (N,)
+
+
+# features:
+
+# Loop over every 200 ms window to extract features
+X_features = np.array([compute_window_features(w) for w in X_raw_windows])
+
+print(f"Feature matrix shape (MAV): {X_features.shape}")  # Expected: (N, 8)
+print(f"Sample MAV vector (first window): \n{X_features[0]}")
+
+
+
+
+
+# print(df.head())
+
+# signal_value = df.loc[(df["label"] == 1) & (df["class"] == 1), "channel1"]
+# signal_time = df.loc[(df["label"] == 1) & (df["class"] == 1), "time"]
+
+# print(df.loc[(df["label"] == 1) & (df["class"] == 1), "time"])
+
+# # plot_signal(signal_time, signal_value)
+
+# # Extract segmented signals for all groups.
+
+
+
+# # This loop checks whether the time values decrease, which would indicate a new segment.
+# value_previous = 0
+# for value in signal_time:
+#     if value < value_previous:
+#         print("a")
+#     value_previous = value
+
+# # Plot the first and second segments from each extracted signal group.
+# for subject_signal in subject_signals:
+#     plot_signal(subject_signal['signal_time_1'], subject_signal['signal_values_1'][0])
+#     plot_signal(subject_signal['signal_time_2'], subject_signal['signal_values_2'][0])
