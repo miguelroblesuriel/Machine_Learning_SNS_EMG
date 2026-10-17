@@ -6,6 +6,10 @@
 import pandas as pd
 import numpy as np
 import seaborn as sns
+from sympy import true
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+
 from Visualization.plot_signal import plot_signal
 
 # Duplicate import kept intentionally; it is not harmful, but it is redundant.
@@ -43,19 +47,63 @@ def extract_signals(df):
             if len(split_indices) > 0
             else []
         )
+        times_1 = time_splits[0]
+        times_2 = time_splits[1]
+        signal_matrix_1 = signal_values_1
+        signal_matrix_2 = signal_values_2
+        cutoff_idx = len(times_1)
+        value_previous = times_1[0]
+        for i, time_1 in enumerate(times_1):
+            if time_1 > value_previous + 1000:
+                cutoff_idx = i
+                break
+            value_previous = time_1
+
+        tiempo_1_1 = times_1[:cutoff_idx]
+        tiempo_1_2 = times_1[cutoff_idx:]
+
+        señal_1_1 = [channel[:cutoff_idx] for channel in signal_matrix_1]
+        señal_1_2 = [channel[cutoff_idx:] for channel in signal_matrix_1]
+
+        cutoff_idx = len(times_2)
+        value_previous = times_2[0]
+        for i, time_2 in enumerate(times_2):
+            if time_2 > value_previous + 1000:
+                cutoff_idx = i
+                break
+            value_previous = time_2
+
+        tiempo_2_1 = times_2[:cutoff_idx]
+        tiempo_2_2 = times_2[cutoff_idx:]
+
+        señal_2_1 = [channel[:cutoff_idx] for channel in signal_matrix_2]
+        señal_2_2 = [channel[cutoff_idx:] for channel in signal_matrix_2]
+
         # Store in dictionary
         subject_signals.append({
             'subject': label,
-            'signal_values_1': signal_values_1,
-            'signal_time_1': time_splits[0],
-            'signal_values_2': signal_values_2,
-            'signal_time_2': time_splits[1]
+            'signal_values_1': señal_1_1,
+            'signal_time_1': tiempo_1_1,
+            'signal_values_2': señal_2_1,
+            'signal_time_2': tiempo_2_1
+            if len(time_splits) > 1
+            else np.array([]),
+            'class': class_val,
+        })
+
+        subject_signals.append({
+            'subject': label,
+            'signal_values_1': señal_1_2,
+            'signal_time_1': tiempo_1_2,
+            'signal_values_2': señal_2_2,
+            'signal_time_2': tiempo_2_2
             if len(time_splits) > 1
             else np.array([]),
             'class': class_val,
         })
 
     return subject_signals
+
 
 def extract_windows(signal_data, window_size=200, step_size=50):
     """
@@ -222,25 +270,55 @@ plot_signal(signal_time, signal_value)
 
 # Extract segmented signals for all groups.
 subject_signals = extract_signals(df)
-
-# This loop checks whether the time values decrease, which would indicate a new segment.
-value_previous = 0
-for value in signal_time:
-    if value < value_previous:
-        print("a")
-    value_previous = value
-
-# Plot the first and second segments from each extracted signal group.
 for subject_signal in subject_signals:
-    if subject_signal["class"] == 1:
-        if subject_signal["subject"] == 1:
-            plot_signal(subject_signal['signal_time_1'], subject_signal['signal_values_1'][6])
-            plot_signal(subject_signal['signal_time_2'], subject_signal['signal_values_2'][6])
+    if subject_signal["subject"] == 1:
+        print(subject_signal["class"])
+        plot_signal(subject_signal["signal_time_1"], subject_signal["signal_values_1"][6])
+
+
+
 
 training_x, testing_x, validation_x, training_y, testing_y, validation_y = split_by_subjects(subject_signals,0.6,0.2)
-print(len(training_x))
+print(training_x[0])
 print(len(training_y))
 
 training_x2, testing_x2, validation_x2, training_y2, testing_y2, validation_y2 = split_by_subjects(subject_signals,0.6,0.2)
 print(len(training_x2))
 print(len(training_y2))
+
+n_samples_train = training_x.shape[0]
+training_x_flat = training_x.reshape(n_samples_train, -1)
+
+n_samples_val = validation_x.shape[0]
+validation_x_flat = validation_x.reshape(n_samples_val, -1)
+
+n_samples_test = testing_x.shape[0]
+testing_x_flat = testing_x.reshape(n_samples_test, -1)
+
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_model.fit(training_x_flat, training_y)
+val_pred = rf_model.predict(validation_x_flat)
+val_accuracy = accuracy_score(validation_y, val_pred)
+print(f"Precisión en Validación: {val_accuracy * 100:.2f}%\n")
+test_pred = rf_model.predict(testing_x_flat)
+print("Reporte de clasificación final (Testing):")
+print(classification_report(testing_y, test_pred))
+
+n_samples_train2 = training_x2.shape[0]
+training_x_flat2 = training_x2.reshape(n_samples_train2, -1)
+print(len(training_x_flat2))
+
+n_samples_val2 = validation_x2.shape[0]
+validation_x_flat2 = validation_x2.reshape(n_samples_val2, -1)
+
+n_samples_test2 = testing_x2.shape[0]
+testing_x_flat2 = testing_x2.reshape(n_samples_test2, -1)
+
+rf_model2 = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_model2.fit(training_x_flat2, training_y2)
+val_pred2 = rf_model2.predict(validation_x_flat2)
+val_accuracy2 = accuracy_score(validation_y2, val_pred2)
+print(f"Precisión en Validación: {val_accuracy2 * 100:.2f}%\n")
+test_pred2 = rf_model2.predict(testing_x_flat2)
+print("Reporte de clasificación final (Testing):")
+print(classification_report(testing_y2, test_pred2))
