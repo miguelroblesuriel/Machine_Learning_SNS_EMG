@@ -2,6 +2,7 @@
 # It loads the dataset, filters specific label/class combinations, and plots the signal.
 # I would not remove anything here yet, because the script is still useful for debugging and visual validation.
 # The duplicate NumPy import is redundant, but it is harmless and I left it in place to avoid changing working code.
+print('hello')
 #%%
 import pandas as pd
 import numpy as np
@@ -10,6 +11,10 @@ import matplotlib.pyplot as plt
 from Visualization.plot_signal import plot_signal
 from scipy.linalg import solve_toeplitz
 from scipy.signal import periodogram
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.metrics import classification_report, accuracy_score
 
 
 
@@ -24,7 +29,11 @@ df["series"] = backward_jump.groupby(df["label"]).cumsum().astype(int)
 
 # Sampling rate
 dt = df.groupby(["label", "series"])["time"].diff().dropna()
-FS = 1000 / dt.median()
+
+
+
+PERIOD_MS = 8
+FS = 1000 / PERIOD_MS
 
 WINDOW_MS = 200                                         # window length in ms
 OVERLAP_MS = 100                                        # hop between windows in ms
@@ -56,9 +65,15 @@ n_seg = df.groupby(["label", "class"])["segment"].nunique().unstack()
 seg_len = df.groupby("segment").size()
 #print(seg_len.describe())
 
-print(df['segment'][50:100])
 
 #%%
+# --------------------------------------------------------------------- functions
+def thin_segment(g, period_ms=PERIOD_MS):
+    """Keep the first row of every 8 ms time bin -> about one row per real sample."""
+    t = g["time"].to_numpy()
+    bins = ((t - t[0]) // period_ms).astype(int)
+    first_row_of_bin = np.unique(bins, return_index=True)[1]
+    return g[channel_cols_all].to_numpy()[first_row_of_bin]
 
 #Each channel (8) has 36x6x4=864 segments.
 def extract_segments(df):
@@ -69,14 +84,9 @@ def extract_segments(df):
             "segment": seg_id,
             "subject": g["label"].iloc[0],
             "class": g["class"].iloc[0],
-            "signal": g[channel_cols_all].to_numpy(),
+            "signal": thin_segment(g),
         })
     return segments
-
-
-#new_df = extract_segments(df)
-
-#%%
 
 # Each segment gets window sliced according to the settings.
 def extract_windows(signal_data, window_size, step_size):
@@ -117,12 +127,20 @@ def ar_coefficients(sig, order=AR_ORDER):
         return np.zeros(order)
     return solve_toeplitz(r[:order], r[1:order + 1])
  
+def compute_ar(window):
+    """(n_samples, 8) -> (32,) = 4 AR coeff. per 8 channels"""
+    ar = np.concatenate([ar_coefficients(window[:, ch]) for ch in range(N_CHANNELS)])
+    return ar
  
 def mean_frequency(sig, fs=FS):
     """MNF = sum(f * P(f)) / sum(P(f)) using the periodogram."""
     f, p = periodogram(sig - np.mean(sig), fs=fs)
     total = p.sum()
     return float((f * p).sum() / total) if total > 0 else 0.0
+
+def compute_mnf(window):
+    """(n_samples, 8) -> (8,) one mean frequency (Hz) per channel."""
+    return np.array([mean_frequency(window[:, ch], fs=FS) for ch in range(N_CHANNELS)])
  
  
 def compute_window_features(window):
@@ -138,48 +156,68 @@ def compute_window_features(window):
         window_features.extend(ar_coefficients(sig))         # AR(4)
         window_features.append(mean_frequency(sig))          # MNF
     return np.array(window_features)
- 
- 
-FEATURE_NAMES = [
-    f"ch{ch + 1}_{name}"
-    for ch in range(N_CHANNELS)
-    for name in ["MAV", "AR1", "AR2", "AR3", "AR4", "MNF"]
-]
+
 
 
 
 # plot_8_channels(time=df["time"], channel=channel_cols_all, title="Raw 8-channel Data")
 
 
-#%%
+#%% 
+# -------------------------------------- EXTRACTING SEGMENTS AND FEATURES
 
 segments = extract_segments(df)
 
-mav_list, y_labels, subject_ids, segment_ids, window_lengths = [], [], [], [], []
+mav_list, ar_list, mnf_list, y_labels, subject_ids, segment_ids, window_lengths = [], [], [], [], [], [], []
 
 for item in segments:
     windows = extract_windows(item["signal"], WINDOW_SIZE, STEP_SIZE)
     for w in windows:
         mav_list.append(compute_mav(w))
+        ar_list.append(compute_ar(w))
+        mnf_list.append(compute_mnf(w))
         y_labels.append(item["class"])
         subject_ids.append(item["subject"])
         segment_ids.append(item["segment"])
         window_lengths.append(len(w))
 
+# (???????????????????????????????????)
+# From what the code suggests is that we have repetitions of samples. So the data has a unique sampling rate of ~125Hz but is actually sampled at 1000Hz.
+# so essencially we have repeating values which affect MAV and AR (AR more than MAV). Not sure what to do with this...
+ 
+# w = windows[0]
+# print(w.shape, (np.diff(w, axis=0) == 0).all(axis=1).mean())
+
+# print(df["segment"].unique()[:10])
+# seg = df[df["segment"] == df["segment"].unique()[0]]     # first segment that exists
+# print(len(seg), seg["class"].iloc[0])
+
+# seg = df[df["segment"] == 1]                      # pick a segment by its ID
+# plt.plot(seg["channel1"].to_numpy()[500:700], ".")  # rows 500 to 700 of that segment
+# plt.show()
+
+#plt.plot(df.loc[df["label"] == 1, 'channel1'].to_numpy()) # plot signal (remove)
+
+
 X_mav = np.array(mav_list)          # (N, 8)
+X_ar = np.array(ar_list)
+X_mnf = np.array(mnf_list)
+
 y_labels = np.array(y_labels)       # (N,)
 subject_ids = np.array(subject_ids)
 segment_ids = np.array(segment_ids)
 window_lengths = np.array(window_lengths)
 
 print(f"MAV feature matrix: {X_mav.shape}")
-print(f"Window lengths: {dict(zip(*np.unique(window_lengths, return_counts=True)))}")
+print(f"AR feature matrix: {X_ar.shape}")
+print(f"MNF feature matrix: {X_mnf.shape}")
+#print(f"Window lengths: {dict(zip(*np.unique(window_lengths, return_counts=True)))}")
 
 
-all_windows = []
-y_labels = []
-subject_ids = []
+#%%
+# --------------------------------------------------------------------- VISUALIZATION OF FEATURES
 
+# ===================== MAV =====================
 mav_df = pd.DataFrame(X_mav, columns=[f"ch{i}" for i in range(1, 9)])
 mav_df["class"] = y_labels
 
@@ -200,51 +238,135 @@ for i, ax in enumerate(axs.flat):
 plt.tight_layout()
 plt.show()
 
+# ======================== AR =========================
+X_ar3 = X_ar.reshape(len(X_ar), N_CHANNELS, AR_ORDER) # (N, 8, 4)
+
+fig, axs = plt.subplots(2, 2, figsize=(14, 7))
+vmax = np.abs(X_ar3).mean()   # placeholder, replaced below
+tables = []
+for k in range(AR_ORDER):
+    t = pd.DataFrame(X_ar3[:, :, k], columns=[f"ch{i}" for i in range(1, 9)])
+    t["class"] = y_labels
+    tables.append(t.groupby("class").mean())
+
+vmax = max(np.abs(t.values).max() for t in tables)   # same colour scale for all four
+
+for k, ax in enumerate(axs.flat):
+    sns.heatmap(tables[k], annot=True, fmt=".2f", cmap="coolwarm",
+                center=0, ax=ax)
+    ax.set_title(f"Mean AR{k + 1} per class and channel")
+plt.tight_layout()
+plt.show()
+
+# ====================== MNF ========================================
+mnf_df = pd.DataFrame(X_mnf, columns=[f"ch{i}" for i in range(1, 9)])
+mnf_df["class"] = y_labels
+
+mean_table = mnf_df.groupby("class").mean()
+plt.figure(figsize=(10, 4))
+sns.heatmap(mean_table, annot=True, fmt=".1f", cmap="viridis")
+plt.title("Mean MNF (Hz) per class and channel")
+plt.show()
+
+fig, axs = plt.subplots(2, 4, figsize=(16, 7), sharex=True)
+for i, ax in enumerate(axs.flat):
+    sns.boxplot(data=mnf_df, x="class", y=f"ch{i + 1}", ax=ax, showfliers=False)
+    ax.set_title(f"Channel {i + 1}")
+plt.tight_layout()
+plt.show()
+
+
 #%%
 
-# Combine all extracted trial blocks into unified arrays
-X_raw_windows = np.vstack(all_windows)
-y_labels = np.array(y_labels)
-subject_ids = np.array(subject_ids)
+from sklearn.ensemble import RandomForestClassifier
 
-print(f"Raw windows shape:  {X_raw_windows.shape}")  # Expected: (N, 200, 8)
-print(f"Labels shape:       {y_labels.shape}")       # Expected: (N,)
-print(f"Subject IDs shape:  {subject_ids.shape}")   # Expected: (N,)
+# 1. Combine all existing feature matrices horizontally
+X_combined = np.hstack((X_mav, X_ar, X_mnf))
+
+# 2. Train a baseline Random Forest model
+rf = RandomForestClassifier(n_estimators=100, random_state=42)
+rf.fit(X_combined, y_labels)
+
+# 3. Create labels to identify each feature in the chart
+mav_labels = [f"MAV_ch{i}" for i in range(1, 9)]
+ar_labels = [f"AR{k}_ch{i}" for i in range(1, 9) for k in range(1, 5)]
+mnf_labels = [f"MNF_ch{i}" for i in range(1, 9)]
+feature_names = mav_labels + ar_labels + mnf_labels
+
+# 4. Extract and plot the importances
+importances = rf.feature_importances_
+importance_df = pd.DataFrame({"Feature": feature_names, "Importance": importances})
+importance_df = importance_df.sort_values(by="Importance", ascending=False)
+
+plt.figure(figsize=(10, 10))
+sns.barplot(data=importance_df, x="Importance", y="Feature", palette="viridis")
+plt.title("Random Forest Feature Importance")
+plt.tight_layout()
+plt.show()
+
+#%%
+# ------------------------------------ SVM TRAINING
+
+X_combined = np.hstack((X_mav, X_ar, X_mnf))
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_combined, 
+    y_labels, 
+    test_size=0.2, 
+    random_state=42, 
+    stratify=y_labels
+)
+
+scaler = StandardScaler()
+
+# Fit the scaler ONLY on the training data, then transform it
+X_train_scaled = scaler.fit_transform(X_train)
+
+# Transform the test data using the parameters learned strictly from the training set
+X_test_scaled = scaler.transform(X_test)
 
 
-# features:
+# ================ Linear SVM for Baseline ========================
+svm_linear = SVC(kernel='linear', C=1.0, random_state=42)
+svm_linear.fit(X_train_scaled, y_train)
 
-# Loop over every 200 ms window to extract features
-X_features = np.array([compute_window_features(w) for w in X_raw_windows])
+y_pred_linear = svm_linear.predict(X_test_scaled)
 
-print(f"Feature matrix shape (MAV): {X_features.shape}")  # Expected: (N, 8)
-print(f"Sample MAV vector (first window): \n{X_features[0]}")
-
-
-
-
-
-# print(df.head())
-
-# signal_value = df.loc[(df["label"] == 1) & (df["class"] == 1), "channel1"]
-# signal_time = df.loc[(df["label"] == 1) & (df["class"] == 1), "time"]
-
-# print(df.loc[(df["label"] == 1) & (df["class"] == 1), "time"])
-
-# # plot_signal(signal_time, signal_value)
-
-# # Extract segmented signals for all groups.
+print("--- Linear SVM Results ---")
+print(f"Accuracy: {accuracy_score(y_test, y_pred_linear):.4f}")
+print(classification_report(y_test, y_pred_linear))
 
 
+# ================ RBF SVM ====================
+svm_rbf = SVC(kernel='rbf', C=1.0, gamma='scale', random_state=42)
+svm_rbf.fit(X_train_scaled, y_train)
 
-# # This loop checks whether the time values decrease, which would indicate a new segment.
-# value_previous = 0
-# for value in signal_time:
-#     if value < value_previous:
-#         print("a")
-#     value_previous = value
+y_pred_rbf = svm_rbf.predict(X_test_scaled)
 
-# # Plot the first and second segments from each extracted signal group.
-# for subject_signal in subject_signals:
-#     plot_signal(subject_signal['signal_time_1'], subject_signal['signal_values_1'][0])
-#     plot_signal(subject_signal['signal_time_2'], subject_signal['signal_values_2'][0])
+print("--- RBF SVM Results ---")
+print(f"Accuracy: {accuracy_score(y_test, y_pred_rbf):.4f}")
+print(classification_report(y_test, y_pred_rbf))
+
+# ================== Poly SVM =============================
+svm_poly = SVC(kernel='poly', degree=3, C=1.0, coef0=1.0, random_state=42)
+svm_poly.fit(X_train_scaled, y_train)
+
+y_pred_poly = svm_poly.predict(X_test_scaled)
+
+print("--- Polynomial SVM (Degree 3) Results ---")
+print(f"Accuracy: {accuracy_score(y_test, y_pred_poly):.4f}")
+print(classification_report(y_test, y_pred_poly))
+
+#%%
+
+# FS PRECOMPUTATION
+periods = []
+for seg_id, g in df[df["class"].isin([2, 3, 4, 5, 6])].groupby("segment"):
+    vals = g[channel_cols_all].to_numpy()
+    t = g["time"].to_numpy()
+    changed = np.any(vals[1:] != vals[:-1], axis=1)
+    periods.append(np.diff(t[1:][changed]))     # time between consecutive new values (ms)
+periods = np.concatenate(periods)
+
+
+#%%
